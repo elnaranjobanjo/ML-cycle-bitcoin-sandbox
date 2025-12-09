@@ -1,58 +1,47 @@
+Install dependencies and run every workflow command through the Taskfile (`task <name>`).
+
 # Bitcoin ML Lifecycle Sandbox
 
-This project is a lightweight, end-to-end sandbox for the ML lifecycle focused on Bitcoin price data. The emphasis is on stitching together the ingestion → labeling → reporting → modeling/ops -> monitoring -> retraining flow rather than beating production fintech models.
+This sandbox ingests raw Bitcoin trading data, persists it to DuckDB, trains forecasting models, and manages the full ML lifecycle with MLflow so we can upgrade and deploy better models quickly.
 
-## Current Capabilities
-
-1. **Bitcoin ingestion**
-   - `task ingest` fetches BTC/USDT minute candles from Binance using `config/bitcoin_ingest.json` (interval, limit, table).
-   - Candles are stored in DuckDB at `feature_store/bitcoin.duckdb`.
-   - Each candle is stored with its OHLCV statistics, and the command logs how many **new** rows were inserted plus the total row count. This metadata can be written to `feature_store/ingestion_stats.json` for quick reference.
-
-2. **Feature access helpers**
-   - `data_ingestion_service.load_candles_from_duckdb()` returns typed `BitcoinCandle` objects for analysis or modeling.
-   - `data_ingestion_service.reader.count_candles()` returns the current row count without loading the entire table.
-
-3. **PDF reporting**
-   - After each ingest we generate `reports/ingestion/<timestamp>/report.pdf` plus accompanying images so we can visually inspect the latest data. The report covers summary stats and OHLCV plots.
-
-## Roadmap
-
-- Build baseline models in `src/ml/` using the stored candles plus engineered labels, and re-enable the MLflow `track` / `register` commands.
-- Integrate Feast once model inputs stabilize to keep offline and online features in sync.
-- Add monitoring/retraining hooks leveraging the ingestion/reporting pipeline.
-
-## Running the Pipeline
+## Quick Start
 
 ```bash
-# sync deps and run ingestion + report
+# show available tasks
+task -l
+
+# sync Python dependencies
+task sync
+
+# pull fresh BTC/USDT candles, store them in DuckDB, and build reports
 task ingest
 ```
 
-## Serving the Model via API
+All other workflows (`track`, `register`, `api`, `mlflow-ui`, `style`) are also exposed as Taskfile entries so the project can be installed and executed in a consistent, reproducible way.
 
-The `src/api` module provides a FastAPI scaffold for serving registered MLflow models.
+## Data Lifecycle
 
-```bash
-# start the API (MODEL_URI defaults to models:/bitcoin-model@production)
-MODEL_URI=models:/bitcoin-model@production uv run uvicorn api.app:app --host 0.0.0.0 --port 8000
-```
+- **Ingestion**: `task ingest` fetches BTC/USDT minute candles from Binance (configurable via `config/bitcoin_ingest.json`) and loads them into `feature_store/bitcoin.duckdb` as typed OHLCV rows.
+- **Storage & access**: DuckDB acts as the feature store so analysts and training jobs can stream historical candles without a heavy database dependency. Convenience helpers in `src/data_ingestion_service` load typed entities or provide row counts for monitoring tasks.
+- **Reporting**: Every ingest run renders PDF diagnostics to `reports/ingestion/<timestamp>/report.pdf`, providing quick sanity checks on volume, price swings, and engineered features.
 
-Endpoints:
-- `GET /health` — readiness probe.
-- `POST /predict` — accepts `{"features": [ ... ]}` and proxies the payload to the loaded model.
+## Modeling and MLflow Operations
 
-Relevant environment variables (see `.env`):
-- `INGEST_CONFIG`: path to the Binance ingestion config
-- `FEATURE_DB_PATH`: DuckDB location
-- `BTC_REPORT_DIR`: base directory for PDF reports
-- `MLFLOW_TRACKING_URI` / `MLFLOW_REGISTRY_URI`: for upcoming training workflows
+- **Training**: `task track` executes `main.py track`, runs model training jobs under MLflow, and logs metrics, parameters, and artifacts to the local `mlruns` directory (or the URIs defined in `.env`).
+- **Model upgrades**: `task register` promotes a specific MLflow run into the registry so the best-performing Bitcoin model receives an alias (e.g., `production`). This enables repeatable upgrades instead of ad-hoc file copies.
+- **Experiment management**: `task mlflow-ui` launches the MLflow UI for browsing experiments, comparing runs, and validating that new training sessions outperform previous baselines before promotion.
 
-## Code Layout
+## Deployment
 
-- `src/data_ingestion_service/`: Binance client, config, DuckDB storage, ingestion entry point, load/count helpers
-- `src/reporting/`: PDF report generation utilities
-- `src/ml/`: (up next) model training routines
-- `src/MLOps/`: MLflow tracking/registry orchestration (to be re-enabled after modeling)
+- `task api` starts the FastAPI service in `src/api`, automatically loading the DuckDB-backed features and the MLflow model referenced by `MODEL_URI` (defaults to `models:/bitcoin-model@production`).
+- The service exposes `GET /health` for readiness checks and `POST /predict` for inference payloads shaped as `{"features": [...]}`. Update the `MODEL_URI` in your shell or `.env` to swap between staging/production models.
 
-The goal is to demonstrate the entire ML lifecycle in a short timeframe (~1 week) while keeping the code straightforward and extensible.
+## Project Layout
+
+- `src/data_ingestion_service/`: Binance client, DuckDB writers/readers, ingest CLI entry point.
+- `src/reporting/`: PDF report builders, plotting helpers, and filesystem layout utilities.
+- `src/ml/`: Model training code plus feature engineering utilities shared across experiments.
+- `src/MLOps/`: MLflow orchestration scripts for tracking, registering, and deploying runs.
+- `main.py`: Task entry points (`ingest`, `track`, `register`) wired up for Taskfile automation.
+
+By storing Bitcoin trading data in DuckDB, iterating on models, and managing registries/deployments via MLflow, the project demonstrates a compact yet complete ML lifecycle optimized for experimentation.
